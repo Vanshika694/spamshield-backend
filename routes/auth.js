@@ -1,12 +1,25 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 
 const router = express.Router();
 const googleClient = new OAuth2Client('991102462359-dguj0hp4cbmuuc5m16kidn6t09ns9a1k.apps.googleusercontent.com');
 
-// Helper — generate JWT token
+// In-memory token store (simple — resets on server restart; fine for student project)
+const resetTokens = new Map(); // token → { email, expires }
+
+// ─── Email transporter (Gmail) ─────────────────────────────────
+const createTransporter = () => nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,  // your Gmail address
+    pass: process.env.EMAIL_PASS,  // Gmail App Password (not your login password)
+  },
+});
+
 const generateToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
@@ -75,7 +88,7 @@ router.post('/login', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-//  POST /api/auth/google  ← NEW: Google SSO
+//  POST /api/auth/google — Google SSO
 // ─────────────────────────────────────────────
 router.post('/google', async (req, res) => {
   try {
@@ -83,7 +96,6 @@ router.post('/google', async (req, res) => {
     if (!idToken)
       return res.status(400).json({ success: false, message: 'Google ID token is required.' });
 
-    // Verify the token with Google's servers
     const ticket = await googleClient.verifyIdToken({
       idToken,
       audience: '991102462359-dguj0hp4cbmuuc5m16kidn6t09ns9a1k.apps.googleusercontent.com',
@@ -93,7 +105,6 @@ router.post('/google', async (req, res) => {
     if (!email)
       return res.status(400).json({ success: false, message: 'Could not get email from Google account.' });
 
-    // Find or create user (upsert)
     let user = await User.findOne({ $or: [{ googleId }, { email: email.toLowerCase() }] });
 
     if (user) {
@@ -126,6 +137,123 @@ router.post('/google', async (req, res) => {
   } catch (err) {
     console.error('Google auth error:', err.message);
     res.status(401).json({ success: false, message: 'Google sign-in failed. Please try again.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  POST /api/auth/forgot-password  ← NEW
+//  Sends real reset email via nodemailer
+// ─────────────────────────────────────────────
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email)
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    // Always return success to avoid email enumeration
+    if (!user) {
+      return res.json({ success: true, message: 'If this email exists, a reset link was sent.' });
+    }
+
+    // Generate secure token
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = Date.now() + 15 * 60 * 1000; // 15 minutes
+    resetTokens.set(token, { email: email.toLowerCase(), expires });
+
+    // Reset link — deep link or web page
+    const resetLink = `${process.env.FRONTEND_URL || 'https://spamshield-backend-zfb1.onrender.com'}/reset-password?token=${token}`;
+
+    const transporter = createTransporter();
+    await transporter.sendMail({
+      from: `"SpamShield Security" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: '🔒 SpamShield — Reset Your Password',
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;background:#0f172a;color:#fff;border-radius:12px;padding:32px;">
+          <div style="text-align:center;margin-bottom:24px;">
+            <div style="display:inline-block;background:linear-gradient(135deg,#1d4ed8,#38bdf8);border-radius:12px;padding:12px 20px;">
+              <span style="font-size:24px;">🛡️ SpamShield</span>
+            </div>
+          </div>
+          <h2 style="color:#38bdf8;margin-bottom:8px;">Reset Your Password</h2>
+          <p style="color:#94a3b8;line-height:1.6;">Hi ${user.name},<br><br>You requested a password reset for your SpamShield account. Click the button below to set a new password. This link expires in <strong style="color:#fff;">15 minutes</strong>.</p>
+          <div style="text-align:center;margin:28px 0;">
+            <a href="${resetLink}" style="background:linear-gradient(135deg,#1d4ed8,#38bdf8);color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:15px;">Reset Password</a>
+          </div>
+          <p style="color:#64748b;font-size:12px;">If you didn't request this, ignore this email. Your password won't change.</p>
+          <hr style="border-color:#1e293b;margin:24px 0;">
+          <p style="color:#64748b;font-size:11px;text-align:center;">SpamShield Security Suite • vanshika.parikh694@gmail.com</p>
+        </div>
+      `,
+    });
+
+    console.log(`📧 Password reset email sent to: ${email}`);
+    res.json({ success: true, message: 'Password reset link sent to your email.' });
+  } catch (err) {
+    console.error('Forgot password error:', err.message);
+    res.status(500).json({ success: false, message: 'Could not send email. Please try again.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  POST /api/auth/reset-password  ← NEW
+//  Called with token from email link
+// ─────────────────────────────────────────────
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword)
+      return res.status(400).json({ success: false, message: 'Token and new password required.' });
+
+    const entry = resetTokens.get(token);
+    if (!entry || Date.now() > entry.expires) {
+      resetTokens.delete(token);
+      return res.status(400).json({ success: false, message: 'Reset link has expired. Please request a new one.' });
+    }
+
+    const user = await User.findOne({ email: entry.email }).select('+password');
+    if (!user)
+      return res.status(404).json({ success: false, message: 'User not found.' });
+
+    user.password = newPassword; // pre-save hook will hash it
+    await user.save();
+    resetTokens.delete(token);
+
+    console.log(`✅ Password reset for: ${entry.email}`);
+    res.json({ success: true, message: 'Password reset successfully. You can now sign in.' });
+  } catch (err) {
+    console.error('Reset password error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  POST /api/auth/admin-setup  ← ONE-TIME ADMIN FIX
+//  Resets admin password (protected by secret key)
+// ─────────────────────────────────────────────
+router.post('/admin-setup', async (req, res) => {
+  try {
+    const { secretKey, email, newPassword } = req.body;
+    // Only allow with the correct secret key
+    if (secretKey !== process.env.ADMIN_SECRET_KEY) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+    if (!user) {
+      // Create admin from scratch if doesn't exist
+      const newUser = await User.create({ name: 'Admin', email: email.toLowerCase(), password: newPassword });
+      return res.json({ success: true, message: 'Admin created.', id: newUser._id });
+    }
+
+    user.password = newPassword;
+    await user.save();
+    console.log(`🔑 Admin password updated for: ${email}`);
+    res.json({ success: true, message: 'Admin password updated successfully.' });
+  } catch (err) {
+    console.error('Admin setup error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error.' });
   }
 });
 

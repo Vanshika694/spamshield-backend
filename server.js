@@ -43,7 +43,7 @@ app.get('/', (req, res) => {
 // ─── MongoDB Atlas Connection ──────────────────
 if (MONGO_URI) {
   mongoose
-    .connect(MONGO_URI)
+    .connect(MONGO_URI, { dbName: 'spamshield' })
     .then(() => console.log('✅ Connected to MongoDB Atlas'))
     .catch((err) => {
       console.error('\n❌ Database connection failed:');

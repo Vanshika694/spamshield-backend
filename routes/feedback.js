@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const Feedback = require('../models/Feedback');
+const { appendToBuffer } = require('../services/feedbackBuffer');
 
 // POST /api/feedback/report
-// Stores user feedback for model retraining
+// Stores user feedback for model retraining (Mongo + local S3 buffer)
 router.post('/report', async (req, res) => {
   try {
     const { username, messageBody, label, confidence } = req.body;
@@ -20,7 +21,18 @@ router.post('/report', async (req, res) => {
     });
 
     await newFeedback.save();
-    res.status(201).json({ message: 'Feedback stored successfully' });
+
+    const bufferEntry = {
+      username,
+      messageBody,
+      label,
+    };
+    const bufferResult = await appendToBuffer(bufferEntry);
+
+    res.status(201).json({
+      message: 'Feedback stored successfully',
+      s3Flushed: bufferResult.flushed || false
+    });
   } catch (err) {
     console.error('❌ Feedback storage error:', err);
     res.status(500).json({ error: 'Failed to store feedback' });

@@ -5,6 +5,7 @@ const cors = require('cors');
 
 const authRoutes = require('./routes/auth');
 const feedbackRoutes = require('./routes/feedback');
+const { flushBuffer } = require('./services/feedbackBuffer');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -50,6 +51,17 @@ if (MONGO_URI) {
       console.error(`   Error: ${err.message}`);
       console.error('   Hint: Check your IP Whitelist in MongoDB Atlas (set to 0.0.0.0/0)\n');
     });
+}
+
+// ─── Startup: flush leftover S3 buffer ─────────
+if (process.env.S3_BUCKET_NAME) {
+  flushBuffer().then((result) => {
+    if (result.flushed) {
+      console.log(`✅ Startup: flushed leftover buffer to S3 (${result.key})`);
+    } else {
+      console.log('ℹ️  Startup: no leftover feedback buffer to flush');
+    }
+  }).catch(() => {});
 }
 
 // ─── Start Server ──────────────────────────────

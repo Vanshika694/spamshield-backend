@@ -23,7 +23,6 @@ router.post('/report', async (req, res) => {
     await newFeedback.save();
 
     const bufferEntry = {
-      username,
       messageBody,
       label,
     };

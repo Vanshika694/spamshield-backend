@@ -5,11 +5,11 @@ const FeedbackSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  messageBody: {
+  Msg: {
     type: String,
     required: true
   },
-  label: {
+  Label: {
     type: String,
     enum: ['spam', 'not spam'],
     required: true

@@ -7,7 +7,7 @@ const BUFFER_DIR = path.join(__dirname, '..', 'data');
 const BUFFER_FILE = path.join(BUFFER_DIR, 'feedback_buffer.csv');
 const BATCH_SIZE = parseInt(process.env.FEEDBACK_BATCH_SIZE, 10) || 25;
 
-const CSV_HEADERS = 'messageBody,label\n';
+const CSV_HEADERS = 'Msg,Label\n';
 
 function ensureBufferFile() {
   if (!fs.existsSync(BUFFER_DIR)) {
@@ -28,8 +28,8 @@ function escapeCsvField(value) {
 
 function entryToCsvRow(entry) {
   return [
-    escapeCsvField(entry.messageBody),
-    escapeCsvField(entry.label),
+    escapeCsvField(entry.Msg),
+    escapeCsvField(entry.Label),
   ].join(',') + '\n';
 }
 

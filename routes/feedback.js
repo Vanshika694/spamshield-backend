@@ -15,16 +15,16 @@ router.post('/report', async (req, res) => {
 
     const newFeedback = new Feedback({
       username,
-      messageBody,
-      label,
+      Msg: messageBody,
+      Label: label,
       originalConfidence: confidence || 0
     });
 
     await newFeedback.save();
 
     const bufferEntry = {
-      messageBody,
-      label,
+      Msg: messageBody,
+      Label: label,
     };
     const bufferResult = await appendToBuffer(bufferEntry);
 
